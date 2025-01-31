@@ -20,8 +20,8 @@ const ig = new IgApiClient();
 app.use(express.json());
 
 // Route to authenticate and download media
-app.post('/download', async (req, res) => {
-  const { targetUsername } = req.body;
+app.get('/download', async (req, res) => {
+  const { targetUsername } = req.query;
 
   if (!targetUsername) {
     return res.status(400).send('targetUsername are required');
