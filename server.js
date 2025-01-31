@@ -19,6 +19,23 @@ const ig = new IgApiClient();
 // Set up basic route to serve the app
 app.use(express.json());
 
+const sessionFilePath = path.join(__dirname, 'instagram_session.json');
+
+const loadSession = async () => {
+  if (fs.existsSync(sessionFilePath)) {
+    const sessionData = JSON.parse(fs.readFileSync(sessionFilePath, 'utf-8'));
+    ig.state.deserialize(sessionData);
+    console.log('Logged in using previous session');
+  }
+};
+
+const saveSession = async () => {
+  const sessionData = await ig.state.serialize();
+
+  fs.writeFileSync(sessionFilePath, JSON.stringify(sessionData));
+  console.log('Session has been saved for reusability');
+};
+
 // Route to authenticate and download media
 app.get('/download', async (req, res) => {
   const { targetUsername } = req.query;
@@ -28,12 +45,25 @@ app.get('/download', async (req, res) => {
   }
 
   try {
-    const { username, password } = process.env;
+    // TO be Removed
+    const { INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD } = process.env;
+    ig.state.generateDevice(INSTAGRAM_USERNAME);
+    await ig.account.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD);
+    console.log('Logged in as:', INSTAGRAM_USERNAME);
 
-    // Log in to Instagram
-    ig.state.generateDevice(username);
-    await ig.account.login(username, password);
-    console.log('Logged in as:', username);
+    /* To be Added For now the saveSession is now working properly
+      // Load the existing session if previously logged in
+      await loadSession();
+      // If session is not available Log in to Instagram
+      if (!ig.state.cookieCsrfToken) {
+        const { INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD } = process.env;
+
+        ig.state.generateDevice(INSTAGRAM_USERNAME);
+        await ig.account.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD);
+        console.log('Logged in as:', INSTAGRAM_USERNAME);
+        await saveSession();
+      }
+    */
 
     // Fetch user profile
     const { users } = await ig.user.search(targetUsername);
@@ -56,18 +86,19 @@ app.get('/download', async (req, res) => {
     };
 
     // Process media and send back URLs or download them
-    const downloadMedia = async (mediaType, mediaArray) => {
+    const downloadMedia = async (postType, mediaArray) => {
       for (const mediaItem of mediaArray) {
-        const mediaUrl = mediaItem.image_versions2
-          ? mediaItem.image_versions2.candidates[0].url
-          : mediaItem.video_versions
-          ? mediaItem.video_versions[0].url
-          : null;
+        const imageMediaItemUrl =
+          mediaItem?.image_versions2?.candidates?.length > 0
+            ? mediaItem.image_versions2.candidates[0].url
+            : null;
+        const videoMediaItemUrl =
+          mediaItem?.video_versions?.length > 0
+            ? mediaItem.video_versions[0].url
+            : null;
 
-        if (mediaUrl) {
-          const fileName = `${mediaType}-${mediaItem.pk}.${
-            mediaItem.image_versions2 ? 'jpg' : 'mp4'
-          }`;
+        const fetchMedia = async (mediaType, mediaMimeType, mediaUrl) => {
+          const fileName = `${mediaType}-${mediaItem.pk}.${mediaMimeType}`;
           const filePath = path.join(__dirname, 'downloads', fileName);
 
           // Create the directory if it doesn't exist
@@ -80,6 +111,13 @@ app.get('/download', async (req, res) => {
             responseType: 'stream',
           });
           response.data.pipe(fs.createWriteStream(filePath));
+        };
+
+        if (imageMediaItemUrl) {
+          fetchMedia(postType, 'jpg', imageMediaItemUrl);
+        }
+        if (videoMediaItemUrl) {
+          fetchMedia(postType, 'mp4', videoMediaItemUrl);
         }
       }
     };
