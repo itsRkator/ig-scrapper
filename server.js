@@ -75,14 +75,9 @@ app.get('/download', async (req, res) => {
     // Get user stories
     const stories = await ig.feed.userStory(userId).items();
 
-    // Get user reels
-    // const reels = await ig.feed.userReels(userId).items();
-
-    // Fetch and download the first 5 posts, stories, and reels as an example
     const media = {
       posts: posts.slice(0, 5),
       stories: stories.slice(0, 5),
-      //   reels: reels.slice(0, 5),
     };
 
     // Process media and send back URLs or download them
@@ -122,10 +117,8 @@ app.get('/download', async (req, res) => {
       }
     };
 
-    // Download posts, stories, and reels
     await downloadMedia('post', media.posts);
     await downloadMedia('story', media.stories);
-    // await downloadMedia('reel', media.reels);
 
     // Respond with success
     res.status(200).send('Media downloaded successfully');
