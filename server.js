@@ -24,8 +24,9 @@ const sessionFilePath = path.join(__dirname, 'instagram_session.json');
 const loadSession = async () => {
   if (fs.existsSync(sessionFilePath)) {
     const sessionData = JSON.parse(fs.readFileSync(sessionFilePath, 'utf-8'));
-    ig.state.deserialize(sessionData);
-    console.log('Logged in using previous session');
+    await ig.state.deserialize(sessionData);
+  } else {
+    console.log('Previous Session is not found!');
   }
 };
 
@@ -45,25 +46,18 @@ app.get('/download', async (req, res) => {
   }
 
   try {
-    // TO be Removed
-    const { INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD } = process.env;
-    ig.state.generateDevice(INSTAGRAM_USERNAME);
-    await ig.account.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD);
-    console.log('Logged in as:', INSTAGRAM_USERNAME);
+    // Load the existing session if previously logged in
+    await loadSession();
 
-    /* To be Added For now the saveSession is now working properly
-      // Load the existing session if previously logged in
-      await loadSession();
-      // If session is not available Log in to Instagram
-      if (!ig.state.cookieCsrfToken) {
-        const { INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD } = process.env;
+    // If session is not available Log in to Instagram
+    if (!ig.state?.uuid) {
+      const { INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD } = process.env;
+      ig.state.generateDevice(INSTAGRAM_USERNAME);
+      await ig.account.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD);
+      console.log('Logged in');
 
-        ig.state.generateDevice(INSTAGRAM_USERNAME);
-        await ig.account.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD);
-        console.log('Logged in as:', INSTAGRAM_USERNAME);
-        await saveSession();
-      }
-    */
+      await saveSession();
+    }
 
     // Fetch user profile
     const { users } = await ig.user.search(targetUsername);
@@ -124,7 +118,7 @@ app.get('/download', async (req, res) => {
     res.status(200).send('Media downloaded successfully');
   } catch (error) {
     console.error('Error:', error);
-    res.status(500).send('Failed to download media');
+    res.status(500).send('Failed to download media', error.message);
   }
 });
 
