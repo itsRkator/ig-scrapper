@@ -1,11 +1,14 @@
-// Import the required modules
-const fs = require('fs');
-const path = require('path');
-
+const dotenv = require('dotenv');
 const express = require('express');
 const { IgApiClient } = require('instagram-private-api');
-const axios = require('axios');
-const dotenv = require('dotenv');
+
+const {
+  loadSession,
+  checkSessionValid,
+  saveSession,
+} = require('./utils/ig-session');
+const { getUserFeedMediaUrl } = require('./utils/fetch-user-feed-media');
+const { filterUserFeed } = require('./utils/filter-feed');
 
 dotenv.config();
 
@@ -19,48 +22,51 @@ const ig = new IgApiClient();
 // Set up basic route to serve the app
 app.use(express.json());
 
-const sessionFilePath = path.join(__dirname, 'instagram_session.json');
-
-const loadSession = async () => {
-  if (fs.existsSync(sessionFilePath)) {
-    const sessionData = JSON.parse(fs.readFileSync(sessionFilePath, 'utf-8'));
-    await ig.state.deserialize(sessionData);
-  } else {
-    console.log('Previous Session is not found!');
-  }
-};
-
-const saveSession = async () => {
-  const sessionData = await ig.state.serialize();
-
-  fs.writeFileSync(sessionFilePath, JSON.stringify(sessionData));
-  console.log('Session has been saved for reusability');
-};
-
 // Route to authenticate and download media
 app.get('/download', async (req, res) => {
-  const { targetUsername } = req.query;
+  const { targetUsername, start_date, end_date } = req.query;
+
+  const start_date_timestamp = start_date ? new Date(start_date) : null;
+  const end_date_timestamp = end_date ? new Date(end_date) : null;
 
   if (!targetUsername) {
-    return res.status(400).send('targetUsername are required');
+    return res.status(400).send('targetUsername is required');
   }
 
   try {
     // Load the existing session if previously logged in
-    await loadSession();
+    await loadSession(ig);
 
-    // If session is not available Log in to Instagram
-    if (!ig.state?.uuid) {
+    // Check if the session is valid
+    const isSessionValid = await checkSessionValid(ig);
+    if (!isSessionValid) {
+      console.log('Session expired or invalid. Logging in again...');
+
+      // If session is invalid, login to Instagram again
       const { INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD } = process.env;
+
+      if (!INSTAGRAM_USERNAME || !INSTAGRAM_PASSWORD) {
+        return res
+          .status(500)
+          .send(
+            'Instagram credentials are missing in the environment variables.'
+          );
+      }
+
       ig.state.generateDevice(INSTAGRAM_USERNAME);
       await ig.account.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD);
-      console.log('Logged in');
+      console.log('Logged in successfully after session expiration');
 
-      await saveSession();
+      // Save the session again after re-login
+      await saveSession(ig);
     }
 
     // Fetch user profile
     const { users } = await ig.user.search(targetUsername);
+    if (!users || users.length === 0) {
+      return res.status(404).send('User not found');
+    }
+
     const userId = users[0].pk;
 
     // Get user posts (Feed)
@@ -70,55 +76,26 @@ app.get('/download', async (req, res) => {
     const stories = await ig.feed.userStory(userId).items();
 
     const media = {
-      posts: posts.slice(0, 5),
-      stories: stories.slice(0, 5),
+      posts: filterUserFeed(posts, start_date_timestamp, end_date_timestamp),
+      stories: filterUserFeed(
+        stories,
+        start_date_timestamp,
+        end_date_timestamp
+      ),
     };
 
-    // Process media and send back URLs or download them
-    const downloadMedia = async (postType, mediaArray) => {
-      for (const mediaItem of mediaArray) {
-        const imageMediaItemUrl =
-          mediaItem?.image_versions2?.candidates?.length > 0
-            ? mediaItem.image_versions2.candidates[0].url
-            : null;
-        const videoMediaItemUrl =
-          mediaItem?.video_versions?.length > 0
-            ? mediaItem.video_versions[0].url
-            : null;
-
-        const fetchMedia = async (mediaType, mediaMimeType, mediaUrl) => {
-          const fileName = `${mediaType}-${mediaItem.pk}.${mediaMimeType}`;
-          const filePath = path.join(__dirname, 'downloads', fileName);
-
-          // Create the directory if it doesn't exist
-          if (!fs.existsSync(path.join(__dirname, 'downloads'))) {
-            fs.mkdirSync(path.join(__dirname, 'downloads'));
-          }
-
-          // Download media
-          const response = await axios.get(mediaUrl, {
-            responseType: 'stream',
-          });
-          response.data.pipe(fs.createWriteStream(filePath));
-        };
-
-        if (imageMediaItemUrl) {
-          fetchMedia(postType, 'jpg', imageMediaItemUrl);
-        }
-        if (videoMediaItemUrl) {
-          fetchMedia(postType, 'mp4', videoMediaItemUrl);
-        }
-      }
-    };
-
-    await downloadMedia('post', media.posts);
-    await downloadMedia('story', media.stories);
+    const storyMedia = getUserFeedMediaUrl(media.stories);
+    const postMedia = getUserFeedMediaUrl(media.posts);
 
     // Respond with success
-    res.status(200).send('Media downloaded successfully');
+    res.status(200).json({
+      message: 'Media downloaded successfully',
+      storyMedia,
+      postMedia,
+    });
   } catch (error) {
-    console.error('Error:', error);
-    res.status(500).send('Failed to download media', error.message);
+    console.error('Error:', error.message);
+    res.status(500).send(`Failed to download media: ${error.message}`);
   }
 });
 
